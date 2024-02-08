@@ -82,7 +82,14 @@ float*CreateGaussianKernelFloat(int radius){
 // 最原始高斯模糊
 void BMP::GaussianBlurFloat(int radius){
     float *weights=CreateGaussianKernelFloat(radius);
-
+    float *src = new float[this->info.biSizeImage];
+    for(int j=0;j<info.biHeight;j++){ // 遍历像素(二重循环)
+        float *ptr1 = &src[j*stride];
+        byte *ptr2 = &content[j*stride];
+        for(int i=0;i<info.biWidth*3;i++){
+            *(ptr1++) = (float)*(ptr2++);
+        }
+    }
     byte *newContent=new byte[this->info.biSizeImage]; //分配内存
     for(int j=0;j<info.biHeight;j++){ // 遍历像素(二重循环)
         for(int i=0;i<info.biWidth;i++){
@@ -95,9 +102,9 @@ void BMP::GaussianBlurFloat(int radius){
                     }
                     int base = ((j+v)*stride) + (u+i)*3;
                     
-                    bSum += content[base+0] * weights[wi];
-                    gSum += content[base+1] * weights[wi];
-                    rSum += content[base+2] * weights[wi];
+                    bSum += src[base+0] * weights[wi];
+                    gSum += src[base+1] * weights[wi];
+                    rSum += src[base+2] * weights[wi];
                     wi++;
                 }
             }
@@ -125,9 +132,20 @@ int*CreateGaussianKernelInt(int radius){
     return weights_int;
 }
 
+
 // 用定点代替浮点的高斯模糊
 void BMP::GaussianBlurInt(int radius){
     int *weights=CreateGaussianKernelInt(radius);
+
+    int *src = new int[this->info.biSizeImage];
+    for(int j=0;j<info.biHeight;j++){ // 遍历像素(二重循环)
+        int *ptr1 = &src[j*stride];
+        byte *ptr2 = &content[j*stride];
+        for(int i=0;i<info.biWidth*3;i++){
+            *(ptr1++) = (int)*(ptr2++);
+        }
+    }
+
     byte*newContent=new byte[this->info.biSizeImage]; //分配内存
     for(int j=0;j<info.biHeight;j++){
         for(int i=0;i<info.biWidth;i++){
@@ -140,9 +158,9 @@ void BMP::GaussianBlurInt(int radius){
                     }
                     int base = ((j+v)*stride) + (u+i)*3;
                     
-                    bSum += content[base+0] * weights[wi];
-                    gSum += content[base+1] * weights[wi];
-                    rSum += content[base+2] * weights[wi];
+                    bSum += src[base+0] * weights[wi];
+                    gSum += src[base+1] * weights[wi];
+                    rSum += src[base+2] * weights[wi];
                     wi++;
                 }
             }

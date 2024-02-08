@@ -1,11 +1,12 @@
 # 从高斯模糊出发，讲现代处理器架构与程序优化
 ## 前言
 &emsp;1969年，阿波罗11号火箭登月，火箭使用的处理器算力，可能不及我们现在家用洗衣机来得高。在上个世纪，程序员想破头脑怎么去对程序进行优化，比如产生了[快速开平方根倒数](https://zhuanlan.zhihu.com/p/74728007)中让人缓缓打出**WTF**的magic number **0x5f3759df**。  
-&emsp;计算机发展到今天，处理器性能非常高，我们日常用到的App，为了快速开发迭代以及跨平台，纷纷用上了webview+javascript的手段代替native框架，用运行效率换开发效率。从便捷性来说，我是挺喜欢js的一些变种的，但是从效率来说，js运行效率就是**史**。现在很多App已经不会太注重**优化**这个问题。但是对于嵌入式程序员来说，执行效率还是一个比较重要的话题。  
+![wtf](./imgs/wtf.jpg)  
+&emsp;计算机发展到今天，处理器性能非常高，我们日常用到的App，为了快速开发迭代以及跨平台，纷纷用上了webview+javascript的手段代替native框架，用运行效率换开发效率。从便捷性来说，我是挺喜欢js的一些变种的，但是从效率来说，js运行效率就是**史**。现在很多App已经不会太注重**优化**这个问题。但是对于底层开发的程序员来说，执行效率还是一个比较重要的话题。  
 &emsp;本文从C++实现高斯模糊这一实例，一步步讲述如何根据现代处理器架构体系去做相对应的优化，相信看完本文你会对现代处理器架构体系有了解。文章如有错误，敬请指出。  
 
 ## 高斯模糊
-&emsp;简单来说，高斯模糊就是二维矩阵卷积，通过二维高斯函数的卷积核对图像进行卷积。高斯卷积核在频域上表现为一个低通滤波器，卷积的结果就是过滤掉图像的高频成分，是图像变得**平滑**，肉眼看去，就是变模糊了。  
+&emsp;简单来说，高斯模糊就是二维矩阵卷积，通过二维高斯函数的卷积核对图像进行卷积。高斯卷积核在频域上表现为一个低通滤波器，卷积的结果就是过滤掉图像的高频成分，使图像变得**平滑**，肉眼看去，就是变模糊了。  
 ![Conv](./imgs/Conv.gif)  
 &emsp;具体原理介绍可以参考我的[CSDN文章](https://blog.csdn.net/u010519174/article/details/116126914)。同样的，我们也可以使用均值卷积核去代替高斯，时域上表现为一个窗函数采样，频域上表现为Sinc函数。均值滤波的缺点是Sinc函数还带有一定的高频成分，滤波得到的图像不那么平滑，但是可以多次进行卷积，频域上就表现为$Sinc^n$，n=3的时候，频域就和高斯函数十分接近了。  
 
@@ -37,7 +38,8 @@ B = content[y*stride+x+0];
 ```
 void BMP::GaussianBlurFloat(int radius){
     float *weights=CreateGaussianKernelFloat(radius);
-
+    // 遍历一次图像将byte[]的content转成float[]的src，减少类型转换影响
+    // ************************省略********************************
     byte *newContent=new byte[this->info.biSizeImage]; //分配内存
     for(int j=0;j<info.biHeight;j++){ // 遍历像素(二重循环)
         for(int i=0;i<info.biWidth;i++){
@@ -50,9 +52,9 @@ void BMP::GaussianBlurFloat(int radius){
                     }
                     int base = ((j+v)*stride) + (u+i)*3;
                     
-                    bSum += content[base+0] * weights[wi];
-                    gSum += content[base+1] * weights[wi];
-                    rSum += content[base+2] * weights[wi];
+                    bSum += src[base+0] * weights[wi];
+                    gSum += src[base+1] * weights[wi];
+                    rSum += src[base+2] * weights[wi];
                     wi++;
                 }
             }
@@ -68,17 +70,19 @@ void BMP::GaussianBlurFloat(int radius){
     this->content=newContent;
 }
 ```
-&emsp;传入参数radius=10，执行该函数，对运行时间进行计时，得到用时为**4970ms**。显然，这是非常糟糕的性能(没开编译器优化)。接下来，我们将对这个算法一步一步进行优化。  
+&emsp;传入参数radius=10，执行该函数，对运行时间进行计时，得到用时为**4527ms**。显然，这是非常糟糕的性能(没开编译器优化)。接下来，我们将对这个算法一步一步进行优化。  
 原图：  
 ![1080P](./imgs/1080P.jpg)  
 高斯模糊：  
 ![Out_Gaussian_Float](./imgs/Out_Gaussian_Float.jpg)  
 
 ## 定点数优化
-&emsp;上述算法使用了**float**浮点数进行计算，从二进制的角度来说，浮点数计算的工作量比整数计算要高很多，现代处理器的浮点性能必然低于整数性能。在此例中，浮点数的取值范围(Logscale)并不大，我们完全可以使用定点数的方法进行计算，同时使用移位代替除法。  
+&emsp;上述算法使用了**float**浮点数进行计算，从二进制的角度来说，浮点数计算的工作量比整数计算要高很多。在此例中，浮点数的取值范围(Logscale)并不大，我们完全可以使用定点数的方法进行计算，同时使用移位代替除法。  
 ```
 void BMP::GaussianBlurInt(int radius){
     int *weights=CreateGaussianKernelInt(radius);
+    // 遍历一次图像将byte[]的content转成int[]的src，减少类型转换影响
+    // ************************省略******************************
     byte*newContent=new byte[this->info.biSizeImage]; //分配内存
     for(int j=0;j<info.biHeight;j++){
         for(int i=0;i<info.biWidth;i++){
@@ -91,9 +95,9 @@ void BMP::GaussianBlurInt(int radius){
                     }
                     int base = ((j+v)*stride) + (u+i)*3;
                     
-                    bSum += content[base+0] * weights[wi];
-                    gSum += content[base+1] * weights[wi];
-                    rSum += content[base+2] * weights[wi];
+                    bSum += src[base+0] * weights[wi];
+                    gSum += src[base+1] * weights[wi];
+                    rSum += src[base+2] * weights[wi];
                     wi++;
                 }
             }
@@ -108,7 +112,7 @@ void BMP::GaussianBlurInt(int radius){
     this->content=newContent;
 }
 ```
-&emsp;统计运行时间为**4464ms**，比**float**的**4970ms**要快了那么一点。但是，还是远远不够！因为现代PC处理器堆了很多电路在计算浮点数上，所以差距不算大，但是对于单片机等嵌入式处理器来说，浮点数也定点数的性能差距是非常大的。  
+&emsp;统计运行时间为**4378ms**，比**float**的**4527ms**要快了那么一点。在开启-O3优化之后，浮点数计算甚至比整形要快一点，因为现在的PC做了很多电路去加速浮点性能，已经做到和int没什么差别。但是对于单片机等嵌入式处理器来说，浮点数和定点数的性能差距是非常大的。  
 
 ## 算法优化
 &emsp;前面提到过，高斯卷积核可以使用均值卷积核进行多次卷积等效。对于均值卷积核，我们不需要使用乘法进行卷积，直接把元素加起来，可以降低运算量，因为做加法的速度比做乘法要快。
@@ -236,7 +240,7 @@ void BMP::MeanBlurPointer(int radius){
 &emsp;统计运行时间为**1277ms**，比前面的**1571ms**又快了一些，但是这个速度，还不够。
 
 ## 算法优化(DP优化)
-&emsp;又回到了算法优化这一问题，这次我们要做的优化就是减少重复的工作。一个均值的卷积操作可以分解为像素逐行卷积，得到的结果再逐列卷积。在逐行（列）求和的过程中，我们可以减少一些重复工作，当求和的窗口移动时，我们可以加右边一个像素再减右边一个像素的方式，让求和的复杂度和窗口宽度即卷积半径无关。那么整个算法的复杂度就从$O(W^2*R^2)$变成$O(W^2)$，与模糊半径无关。因为使用过指针之后代码及其丑陋，这里只放部分代码。
+&emsp;又回到了算法优化这一问题，这次我们要做的优化就是减少重复的工作。一个均值的卷积操作可以分解为像素逐行卷积，得到的结果再逐列卷积。在逐行（列）求和的过程中，我们可以减少一些重复工作，当求和的窗口移动时，我们可以加右边一个像素再减左边一个像素的方式，让求和的复杂度和窗口宽度即卷积半径无关。那么整个算法的复杂度就从$O(W^2*R^2)$变成$O(W^2)$，与模糊半径无关。因为使用过指针之后代码及其丑陋，这里只放部分代码。
 ```
 void BMP::MeanBlur1Dim(int radius){
     byte *newContent=new byte[this->info.biSizeImage]; //分配内存
@@ -271,7 +275,7 @@ void BMP::MeanBlur1Dim(int radius){
 &emsp;统计运行时间为**72ms**，比前面的**1277ms**快了很多，已经非常可观了。
 
 ## CPU多发射优化
-&emsp;如果CPU只有一条流水线，即所有指令都只能从一个通道进行译码执行，那么CPU的性能就完全取决于主频，再做一些分支预测之类的优化去降低控制冒险导致的效率问题。那么CPU的性能早就到头了，因为主频已经没有多少提升的幅度了。
+&emsp;如果CPU只有一条流水线，即所有指令都只能从一个通道进行译码执行，那么CPU的性能就完全取决于主频，再做一些分支预测之类的优化去降低控制冒险导致的效率问题。那么CPU的性能早就到头了，因为主频已经没有多少提升的幅度了。  
 &emsp;现代CPU是多发射超标量的。形象的比喻是，单发射是一个工人在做一个任务，多发射是2个以上工人在做一个任务，这种设计可以让CPU在一个时钟周期执行多条指令。但是程序是顺序执行的，上一条语句还没执行完毕的同时执行下一条语句，是会出现计算错误的。  
 &emsp;设计者当然会考虑到这一点。所以在多发射的同时，会在编译器的层面和处理器硬件的层面，在不影响程序执行结果的情况下，打乱一定范围内的指令，让处理器可以同时执行几条互不相干的指令。  
 &emsp;我们可以在编程的时候，让附近的指令不那么相干，让处理器尽可能地**多发射**。对上面代码进行一些修改：
@@ -311,18 +315,18 @@ void BMP::MeanBlur1Dim(int radius){
 &emsp;这里的处理是让每一个``ptr++``变成```(ptr+1) (ptr+2)```，最后再```ptr+=3```，目的是为了让rgb通道的计算不会因为前后产生的数据冒险(需要等待++完成)而不能多发射。执行100次，对比未做优化和做了优化的时间，其中未做优化为**2499ms**，做了优化为**2411ms**，区别比较小，因为虽然关闭了编译优化，但是处理器层面还是会进行一定的乱序发射。  
 
 ## 缓存优化
-&emsp;单独执行上面经过多发射优化代码中的行模糊和列模糊各100次，得到行模糊耗时为**1029ms**，列模糊耗时为**1627ms**，还是有挺大区别的。为什么？
-&emsp;现代处理器结构还有一个优化就是**Cache**缓存，现代CPU基本都分了3级缓存L1 L2 L3，从电路上来说，它们是SRAM，最小单位为6 MOS管。拆开CPU的Die发现，里面缓存的规模会比CPU核心要大。理想的状态下，如果变量全都存在离CPU最近的L1,那么获取变量的延时几乎可以忽略不计。但是事实是SRAM的面积太大，而且离CPU越远，传输到CPU的延时就会越大，所以L1做不大，一般都是几十KB,最大的L3最多也是几十MB。Cache存在的意义是降低CPU从DDR内存获取数据的延时的敏感性。文末有[网站](https://colin-scott.github.io/personal_website/research/interactive_latency.html)可以让大家了解计算机内各个组件的延时。DDR比Cache的延时要大得多。虽然DDR延时大，但是其带宽并不小，比如DDR4 3200，再一定的内存延时后以25.6GBps的带宽送进CPU。  
+&emsp;单独执行上面经过多发射优化代码中的行模糊和列模糊各100次，得到行模糊耗时为**1029ms**，列模糊耗时为**1627ms**，还是有挺大区别的。为什么？  
+&emsp;现代处理器结构还有一个优化就是**Cache**缓存，现代CPU基本都分了3级缓存L1 L2 L3，从电路上来说，它们是SRAM，最小单位为6 MOS管。拆开CPU的Die发现，里面缓存的规模会比CPU核心要大。理想的状态下，如果变量全都存在离CPU最近的L1,那么获取变量的延时几乎可以忽略不计。但是事实是SRAM的面积太大，而且离CPU越远，传输到CPU的延时就会越大，所以L1做不大，一般都是几十KB,最大的L3最多也是几十MB。Cache存在的意义是降低CPU从DDR内存获取数据的延时的敏感性。文末有[网站](https://colin-scott.github.io/personal_website/research/interactive_latency.html)可以让大家了解计算机内各个组件的延时。DDR比Cache的延时要大得多。虽然DDR延时大，但是其带宽并不小，比如DDR4 3200，在一定的内存延时后以25.6GBps的带宽送进CPU。  
 &emsp;现代CPU有一定的设计，让CPU常用的数据都存在Cache内，Cache再和DDR内存进行数据交换。当Cache未命中时，CPU就需要等待Cache从DDR内存获取数据，这样会减慢指令执行速度。  
-&emsp;对于程序来说，因为数据是按行存储的，每一行相邻像素在内存里面都是连续的。所以行模糊的时候基本不会发生Cache未命中。但是在列模糊的时候，基本操作是访问上下行的像素，这些像素之间的地址差了stride，就会加大Cache未命中的概率。
-&emsp;对于我们的程序，这一部分就没什么优化的空间了，这是是不可避免的。在频繁访问大规模数组的时候，可以对数组进行一定重排降低Cache未命中概率。  
+&emsp;对于程序来说，因为数据是按行存储的，每一行相邻像素在内存里面都是连续的。所以行模糊的时候基本不会发生Cache未命中。但是在列模糊的时候，基本操作是访问上下行的像素，这些像素之间的地址差了stride，就会加大Cache未命中的概率。  
+&emsp;对于我们的程序，这一部分就没什么优化的空间了，这是不可避免的。在频繁访问大规模数组的时候，可以对数组进行一定重排降低Cache未命中概率。  
 
 ## 编译器优化
 &emsp;这一步是最简单的优化，因为是IDE自动开启的。开启g++的-O3优化后，编译器会根据现代CPU架构，进行多发射、乱序执行等优化。这里进行时间对比。
 |                                         | 未开启-O3 | 开启-O3 |
 |-----------------------------------------|----------|-------|
-| float高斯卷积核                          | 4970ms | 1324ms |
-| int高斯卷积核                            | 4464ms | 1012ms |
+| float高斯卷积核                          | 4527ms | 797ms |
+| int高斯卷积核                            | 4378ms | 1028ms |
 | 3x均值卷积核                               | 2257ms | 462ms |
 | 3x均值卷积核+分支优化                       | 1571ms | 315ms |
 | 3x均值卷积核+分支优化+指针                  | 1277ms | 222ms |
@@ -339,10 +343,14 @@ void BMP::MeanBlur1Dim(int radius){
 &emsp;GPU的设计原则就是让每个核心的计算延时高、性能低，但是其面积非常小，适合实现大规模阵列，实现高并行度计算。  
 
 ## 总结
-&emsp;相信看到这里，你已经对现代处理器架构有所了解，在日常的程序编写中，可以根据自己的理解去对程序进行优化，实现更高的性能。
+&emsp;相信看到这里，你已经对现代处理器架构有所了解，在日常的程序编写中，可以根据自己的理解去对程序进行优化，实现更高的性能。  
 
 ### 链接
-快速开平方根倒数：[https://zhuanlan.zhihu.com/p/74728007](https://zhuanlan.zhihu.com/p/74728007)  
-CSDN高斯模糊：[https://blog.csdn.net/u010519174/article/details/116126914](https://blog.csdn.net/u010519174/article/details/116126914)  
-计算机内部延时：[https://colin-scott.github.io/personal_website/research/interactive_latency.html](https://colin-scott.github.io/personal_website/research/interactive_latency.html)  
-Github代码：[https://github.com/HeroChan0330/Mordern-CPU-Arch-and-Program-Optimize](https://github.com/HeroChan0330/Mordern-CPU-Arch-and-Program-Optimize)
+快速开平方根倒数：  
+[https://zhuanlan.zhihu.com/p/74728007](https://zhuanlan.zhihu.com/p/74728007)  
+CSDN高斯模糊：  
+[https://blog.csdn.net/u010519174/article/details/116126914](https://blog.csdn.net/u010519174/article/details/116126914)  
+计算机内部延时：  
+[https://colin-scott.github.io/personal_website/research/interactive_latency.html](https://colin-scott.github.io/personal_website/research/interactive_latency.html)  
+Github代码：  
+[https://github.com/HeroChan0330/Mordern-CPU-Arch-and-Program-Optimize](https://github.com/HeroChan0330/Mordern-CPU-Arch-and-Program-Optimize)
